@@ -1,0 +1,82 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-pvc
+  namespace: fashion-trends
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi  # 512D vectors: ~2KB each; 10M vectors ≈ 20GB
+
+---
+# StatefulSet: Qdrant vector database
+# StatefulSet ensures persistent pod identity — important for cluster membership
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: fashion-trends
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:latest
+          ports:
+            - containerPort: 6333  # HTTP REST API
+              name: http
+            - containerPort: 6334  # gRPC API (higher throughput for bulk operations)
+              name: grpc
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"   # HNSW index is memory-intensive
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 6333
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 6333
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+      volumes:
+        - name: qdrant-storage
+          persistentVolumeClaim:
+            claimName: qdrant-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: fashion-trends
+spec:
+  selector:
+    app: qdrant
+  ports:
+    - name: http
+      port: 6333
+      targetPort: 6333
+    - name: grpc
+      port: 6334
+      targetPort: 6334

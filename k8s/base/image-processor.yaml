@@ -1,0 +1,97 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-processor
+  namespace: fashion-trends
+  labels:
+    app: image-processor
+spec:
+  replicas: 3  # Start with 3; HPA scales to 20 under load
+  selector:
+    matchLabels:
+      app: image-processor
+  template:
+    metadata:
+      labels:
+        app: image-processor
+    spec:
+      containers:
+        - name: image-processor
+          image: fashion-image-processor:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: QDRANT_URL
+              value: "http://qdrant:6333"
+            - name: QDRANT_COLLECTION
+              value: fashion_images
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"   # OpenCV operations are memory-intensive for large images
+              cpu: "2000m"    # 2 CPU cores for parallel SIFT/ORB computation
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30  # C++ startup is fast, but Qdrant connection may take time
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-processor
+  namespace: fashion-trends
+spec:
+  selector:
+    app: image-processor
+  ports:
+    - port: 8080
+      targetPort: 8080
+
+---
+# HPA: aggressive scaling for the compute-intensive image processor
+# 75% CPU target, up to 20 replicas — this is the bottleneck service
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: image-processor-hpa
+  namespace: fashion-trends
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: image-processor
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60   # Wait 60s before scaling up (avoid flapping)
+      policies:
+        - type: Pods
+          value: 4                      # Add up to 4 pods at a time
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5min before scaling down (avoid churn)

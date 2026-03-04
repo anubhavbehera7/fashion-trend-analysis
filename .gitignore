@@ -1,0 +1,104 @@
+# Node.js
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+htmlcov/
+.hypothesis/
+.pytest_cache/
+*.egg-info/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# C++
+*.o
+*.a
+*.out
+*.exe
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V8
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Kubernetes secrets
+k8s/secrets/
+*.secret.yaml
+
+# Data
+data/
+scraped_data/
+
+# Logs
+logs/
+
+# Test output
+test-results/
+coverage/
+htmlcov/
+
+# MinIO data
+minio-data/
+
+# Temporary
+tmp/
+temp/
+.tmp/

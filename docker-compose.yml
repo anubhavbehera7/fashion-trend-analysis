@@ -1,0 +1,244 @@
+version: '3.9'
+
+# ─── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  fashion-network:
+    driver: bridge
+
+# ─── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+  qdrant-storage:
+  redis-data:
+  minio-data:
+
+# ─── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: fashion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fashion_trends
+      POSTGRES_USER: fashion_user
+      POSTGRES_PASSWORD: fashion_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docs/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - fashion-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fashion_user -d fashion_trends"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: fashion-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    networks:
+      - fashion-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: fashion-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - fashion-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  minio:
+    image: minio/minio:latest
+    container_name: fashion-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - fashion-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: fashion-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbit_user
+      RABBITMQ_DEFAULT_PASS: rabbit_pass
+      RABBITMQ_DEFAULT_VHOST: fashion
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - fashion-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Application Services ─────────────────────────────────────────────────────
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: fashion-api-gateway
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://fashion_user:fashion_password@postgres:5432/fashion_trends
+      REDIS_URL: redis://redis:6379
+      IMAGE_PROCESSOR_URL: http://image-processor:8080
+      ML_ANALYSIS_URL: http://ml-analysis:8000
+      LOG_LEVEL: info
+      ALLOWED_ORIGINS: http://localhost:3001
+    ports:
+      - "3000:3000"
+    networks:
+      - fashion-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  image-processor:
+    build:
+      context: ./services/image-processor
+      dockerfile: Dockerfile
+    container_name: fashion-image-processor
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: fashion_images
+    ports:
+      - "8080:8080"
+    networks:
+      - fashion-network
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  ml-analysis:
+    build:
+      context: ./services/ml-analysis
+      dockerfile: Dockerfile
+    container_name: fashion-ml-analysis
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://fashion_user:fashion_password@postgres:5432/fashion_trends
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8000:8000"
+    networks:
+      - fashion-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  web-scraper:
+    build:
+      context: ./services/web-scraper
+      dockerfile: Dockerfile
+    container_name: fashion-web-scraper
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://rabbit_user:rabbit_pass@rabbitmq:5672/fashion
+      MINIO_URL: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      IMAGE_PROCESSOR_URL: http://image-processor:8080
+      SCRAPE_INTERVAL: "3600"
+    networks:
+      - fashion-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+    container_name: fashion-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+      NEXT_PUBLIC_ML_URL: http://localhost:8000
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "3001:3001"
+    networks:
+      - fashion-network
+    depends_on:
+      - api-gateway
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

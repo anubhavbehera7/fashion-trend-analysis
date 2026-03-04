@@ -1,0 +1,107 @@
+---
+# ConfigMap: non-secret database configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: fashion-trends
+data:
+  POSTGRES_DB: fashion_trends
+  POSTGRES_USER: fashion_user
+
+---
+# Secret: database password (base64 encoded in production; use Sealed Secrets or Vault)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: fashion-trends
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: fashion_password
+
+---
+# PersistentVolumeClaim: 10Gi storage for PostgreSQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: fashion-trends
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# StatefulSet: PostgreSQL with persistent storage
+# StatefulSet (not Deployment) because: stable network identity + ordered pod management
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: fashion-trends
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+            - secretRef:
+                name: postgres-secret
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          # pg_isready checks if PostgreSQL is ready to accept connections
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "fashion_user", "-d", "fashion_trends"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "fashion_user"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+
+---
+# Service: headless service for StatefulSet (DNS: postgres-0.postgres.fashion-trends.svc.cluster.local)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: fashion-trends
+spec:
+  clusterIP: None  # Headless service — pods addressed directly by DNS
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
